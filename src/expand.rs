@@ -89,7 +89,7 @@ pub(crate) fn light_verifier_accounts(
             pub authority: ::anchor_lang::prelude::UncheckedAccount<'info>,
             pub token_program: ::anchor_lang::prelude::Program<
                 'info,
-                ::anchor_lang::prelude::Token
+                ::anchor_spl::token::Token
             >,
             /// CHECK: Is checked depending on deposit or withdrawal.
             #[::anchor_lang::prelude::account(mut)]
@@ -155,8 +155,9 @@ mod tests {
         let res = light_verifier_accounts(
             parse_quote! {},
             parse_quote! {
-                struct Accounts {
-                    pub verifier_state: Signer<'info>,
+                #[::anchor_lang::prelude::Accounts]
+                pub struct Accounts {
+                    pub verifier_state: ::anchor_lang::prelude::Signer<'info>,
                 }
             },
         )
@@ -165,8 +166,10 @@ mod tests {
 
         println!("{}", res);
 
-        assert!(res.contains("struct Accounts {"));
-        assert!(res.contains("pub verifier_state : Signer < 'info > ,"));
+        assert!(res.contains("pub struct Accounts {"));
+        assert!(
+            res.contains("pub verifier_state : :: anchor_lang :: prelude :: Signer < 'info > ,")
+        );
         assert!(res.contains(
             "pub program_merkle_tree : :: anchor_lang :: prelude :: Program < 'info \
                               , :: merkle_tree_program :: program :: MerkleTreeProgram > ,"
