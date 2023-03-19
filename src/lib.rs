@@ -1,3 +1,4 @@
+use anchor_syn::AccountsStruct;
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemStruct};
 
@@ -12,11 +13,15 @@ pub fn pubkey(input: TokenStream) -> TokenStream {
         .into()
 }
 
+// #[proc_macro_derive(LightAccounts, attributes(account, instruction))]
 #[proc_macro_attribute]
 pub fn light_verifier_accounts(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as expand::LightVerifierAccountsArgs);
-    let item = parse_macro_input!(item as ItemStruct);
-    expand::light_verifier_accounts(args, item)
+    let item_strct = item.clone();
+    let strct = parse_macro_input!(item_strct as ItemStruct);
+    let accounts_strct = parse_macro_input!(item as AccountsStruct);
+
+    expand::light_verifier_accounts(args, strct, accounts_strct)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

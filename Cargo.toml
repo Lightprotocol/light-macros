@@ -4,10 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anchor-syn = "0.26"
 bs58 = "0.4"
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "1.0", features = ["full"] }
+
+[dev-dependencies]
+anchor-lang = "0.26"
+anchor-spl = "0.26"
 
 [lib]
 proc-macro = true

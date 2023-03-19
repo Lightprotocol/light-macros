@@ -1,7 +1,8 @@
+use anchor_syn::AccountsStruct;
 use bs58::decode;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{parse::Parse, Error, ItemStruct, LitStr, Result};
+use syn::{parse::Parse, parse_quote, Error, Field, ItemStruct, LitStr, Result};
 
 const PUBKEY_LEN: usize = 32;
 
@@ -48,86 +49,119 @@ impl Parse for LightVerifierAccountsArgs {
 
 pub(crate) fn light_verifier_accounts(
     _args: LightVerifierAccountsArgs,
-    item: ItemStruct,
+    strct: ItemStruct,
+    mut accounts_strct: AccountsStruct,
 ) -> Result<TokenStream> {
-    let attrs = &item.attrs;
-    let vis = &item.vis;
-    let struct_token = &item.struct_token;
-    let ident = &item.ident;
-    let generics = &item.generics;
-    let fields = &item.fields;
-    let semi_token = &item.semi_token;
-
-    // NOTE(vadorovsky): Using `&item.fields.iter()` (as `#( #ident ),*` or
-    // `#( #ident )*` or `#ident`) doesn't work... -_-
-    let mut new_fields = Vec::new();
-    for field in fields.iter() {
-        new_fields.push(field);
-    }
-
-    Ok(quote! {
-        #( #attrs )*
-        #vis #struct_token #ident #generics {
-            #( #new_fields ),* ,
+    // This `anchor_syn::AccountsStruct` instance is created only to provide
+    // our own common fields (which we want to append to the original struct
+    // provided as the `item` argument). We define our fields there and then
+    // parse them with `parse_quote!` macro.
+    let common_fields = quote! {
+        pub struct CommonFields {
             /// CHECK: Is the same as in integrity hash.
-            pub program_merkle_tree: ::anchor_lang::prelude::Program<
-                'info,
-                ::merkle_tree_program::program::MerkleTreeProgram
-            >,
-            // CHECK: Is the same as in integrity hash.
-            #[::anchor_lang::prelude::account(mut)]
-            pub merkle_tree: ::anchor_lang::prelude::AccountLoader<
-                'info,
-                ::merkle_tree_program::poseidon_merkle_tree::state::MerkleTree
-            >,
+            pub program_merkle_tree: Program<'info, ::merkle_tree_program::program::MerkleTreeProgram>,
+            /// CHECK: Is the same as in integrity hash.
+            #[account(mut)]
+            pub merkle_tree: AccountLoader<'info, ::merkle_tree_program::poseidon_merkle_tree::state::MerkleTree>,
             /// CHECK: This is the cpi authority and will be enforced in the Merkle tree program.
-            #[::anchor_lang::prelude::account(
+            #[account(
                 mut,
                 seeds=[::merkle_tree_program::program::MerkleTreeProgram::id().to_bytes().as_ref()],
                 bump
             )]
-            pub authority: ::anchor_lang::prelude::UncheckedAccount<'info>,
-            pub token_program: ::anchor_lang::prelude::Program<
-                'info,
-                ::anchor_lang::prelude::Token
-            >,
+            pub authority: UncheckedAccount<'info>,
+            pub token_program: Program<'info, ::anchor_spl::token::Token>,
             /// CHECK: Is checked depending on deposit or withdrawal.
-            #[::anchor_lang::prelude::account(mut)]
-            pub sender: ::anchor_lang::prelude::UncheckedAccount<'info>,
+            #[account(mut)]
+            pub sender: UncheckedAccount<'info>,
             /// CHECK: Is checked depending on deposit or withdrawal.
-            #[::anchor_lang::prelude::account(mut)]
-            pub recipient: ::anchor_lang::prelude::UncheckedAccount<'info>,
+            #[account(mut)]
+            pub recipient: UncheckedAccount<'info>,
             /// CHECK: Is checked depending on deposit or withdrawal.
-            #[::anchor_lang::prelude::account(mut)]
-            pub sender_fee: ::anchor_lang::prelude::UncheckedAccount<'info>,
+            #[account(mut)]
+            pub sender_fee: UncheckedAccount<'info>,
             /// CHECK: Is checked depending on deposit or withdrawal.
-            #[::anchor_lang::prelude::account(mut)]
-            pub recipient_fee: ::anchor_lang::prelude::UncheckedAccount<'info>,,
+            #[account(mut)]
+            pub recipient_fee: UncheckedAccount<'info>,
             /// CHECK: Is not checked the relayer has complete freedom.
-            #[::anchor_lang::prelude::account(mut)]
-            pub relayer_recipient: ::anchor_lang::prelude::UncheckedAccount<'info>,
+            #[account(mut)]
+            pub relayer_recipient: UncheckedAccount<'info>,
             /// CHECK: Is checked when it is used during spl withdrawals.
-            #[::anchor_lang::prelude::account(
+            #[account(
                 mut,
                 seeds=[::merkle_tree_program::utils::constants::TOKEN_AUTHORITY_SEED],
                 bump,
                 seeds::program=::merkle_tree_program::program::MerkleTreeProgram::id()
             )]
-            pub token_authority: ::anchor_lang::prelude::AccountInfo<'info>,
+            pub token_authority: AccountInfo<'info>,
             /// Verifier config pda which needs ot exist Is not checked the relayer has complete freedom.
             /// CHECK: Is the same as in integrity hash.
-            #[::anchor_lang::prelude::account(
+            #[account(
                 mut,
                 seeds=[program_id.key().to_bytes().as_ref()],
                 bump,
                 seeds::program=::merkle_tree_program::program::MerkleTreeProgram::id()
             )]
-            pub registered_verifier_pda: ::anchor_lang::prelude::Account<
+            pub registered_verifier_pda: Account<
                 'info,
                 ::merkle_tree_program::config_accounts::register_verifier::RegisteredVerifier
             >,
         }
-        #semi_token
+    };
+    let common_fields_strct: ItemStruct = parse_quote! {
+        #common_fields
+    };
+    let common_fields_accounts_strct: AccountsStruct = parse_quote! {
+        #common_fields
+    };
+
+    let strct_attrs = &strct.attrs;
+    let strct_vis = &strct.vis;
+    let strct_token = &strct.struct_token;
+    let strct_ident = &strct.ident;
+    let strct_generics = &strct.generics;
+    let mut strct_fields: Vec<Field> = Vec::new();
+
+    // Remove attributes from all fields, to avoid `not a non-macro attribute`
+    // errors. We don't use any non-macro attributes in structs that implement
+    // Anchor's `Accounts` deserializer anyway.
+    for field in strct.fields.iter() {
+        let field = Field {
+            attrs: Vec::new(),
+            vis: field.vis.clone(),
+            ident: field.ident.clone(),
+            colon_token: field.colon_token.clone(),
+            ty: field.ty.clone(),
+        };
+        strct_fields.push(field);
+    }
+    for field in common_fields_strct.fields.iter() {
+        let field = Field {
+            attrs: Vec::new(),
+            vis: field.vis.clone(),
+            ident: field.ident.clone(),
+            colon_token: field.colon_token.clone(),
+            ty: field.ty.clone(),
+        };
+        strct_fields.push(field);
+    }
+
+    let strct_semi_token = &strct.semi_token;
+    let strct = quote! {
+        #( #strct_attrs )*
+        #strct_vis #strct_token #strct_ident #strct_generics {
+            #( #strct_fields ),*
+        } #strct_semi_token
+    };
+
+    accounts_strct
+        .fields
+        .extend(common_fields_accounts_strct.fields);
+
+    Ok(quote! {
+        #strct
+
+        #accounts_strct
     })
 }
 
@@ -152,12 +186,18 @@ mod tests {
 
     #[test]
     fn test_light_verifier_accounts() {
+        let strct = quote! {
+            struct LightInstruction {
+                pub verifier_state: Signer<'info>,
+            }
+        };
         let res = light_verifier_accounts(
             parse_quote! {},
             parse_quote! {
-                struct Accounts {
-                    pub verifier_state: Signer<'info>,
-                }
+                #strct
+            },
+            parse_quote! {
+                #strct
             },
         )
         .expect("Failed to expand light_verifier_accounts")
@@ -165,126 +205,6 @@ mod tests {
 
         println!("{}", res);
 
-        assert!(res.contains("struct Accounts {"));
-        assert!(res.contains("pub verifier_state : Signer < 'info > ,"));
-        assert!(res.contains(
-            "pub program_merkle_tree : :: anchor_lang :: prelude :: Program < 'info \
-                              , :: merkle_tree_program :: program :: MerkleTreeProgram > ,"
-        ));
-        assert!(res.contains("# [:: anchor_lang :: prelude :: account (mut)]"));
-        assert!(res.contains("pub merkle_tree : :: anchor_lang :: prelude :: AccountLoader < 'info \
-                              , :: merkle_tree_program :: poseidon_merkle_tree :: state :: MerkleTree >"));
-        assert!(res.contains(
-            "# [:: anchor_lang :: prelude :: account (mut , seeds = [:: \
-                              merkle_tree_program :: program :: MerkleTreeProgram :: id () . \
-                              to_bytes () . as_ref ()] , bump)]"
-        ));
-        assert!(res
-            .contains("pub authority : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"));
-        assert!(res.contains(
-            "pub token_program : :: anchor_lang :: prelude :: Program < 'info , :: anchor_lang :: \
-                              prelude :: Token > ,"
-        ));
-        assert!(
-            res.contains("pub sender : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,")
-        );
-        assert!(res
-            .contains("pub recipient : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"));
-        assert!(res.contains(
-            "pub sender_fee : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"
-        ));
-        assert!(res.contains(
-            "pub recipient_fee : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"
-        ));
-        assert!(res.contains(
-            "pub relayer_recipient : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"
-        ));
-        assert!(res.contains(
-            "# [:: anchor_lang :: prelude :: account (mut , seeds = [:: \
-                              merkle_tree_program :: utils :: constants :: TOKEN_AUTHORITY_SEED] , \
-                              bump , seeds :: program = :: merkle_tree_program :: program :: \
-                              MerkleTreeProgram :: id ())]"
-        ));
-        assert!(res.contains(
-            "pub token_authority : :: anchor_lang :: prelude :: AccountInfo < 'info > ,"
-        ));
-        assert!(res.contains(
-            "# [:: anchor_lang :: prelude :: account (mut , seeds = [program_id . \
-                              key () . to_bytes () . as_ref ()] , bump , seeds :: program = :: \
-                              merkle_tree_program :: program :: MerkleTreeProgram :: id ())]"
-        ));
-        assert!(res.contains(
-            "pub registered_verifier_pda : :: anchor_lang :: prelude :: Account < 'info , \
-                              :: merkle_tree_program :: config_accounts :: register_verifier :: \
-                              RegisteredVerifier > ,"
-        ));
-    }
-
-    #[test]
-    fn test_light_verifier_accounts_generics() {
-        let res = light_verifier_accounts(
-            parse_quote! {},
-            parse_quote! {
-                struct Accounts<T> {
-                    pub verifier_state: Signer<'info>,
-                }
-            },
-        )
-        .expect("Failed to expand light_verifier_accounts")
-        .to_string();
-
-        assert!(res.contains("struct Accounts < T > {"));
-        assert!(res.contains("pub verifier_state : Signer < 'info > ,"));
-        assert!(res.contains(
-            "pub program_merkle_tree : :: anchor_lang :: prelude :: Program < 'info \
-                              , :: merkle_tree_program :: program :: MerkleTreeProgram > ,"
-        ));
-        assert!(res.contains("# [:: anchor_lang :: prelude :: account (mut)]"));
-        assert!(res.contains("pub merkle_tree : :: anchor_lang :: prelude :: AccountLoader < 'info \
-                              , :: merkle_tree_program :: poseidon_merkle_tree :: state :: MerkleTree >"));
-        assert!(res.contains(
-            "# [:: anchor_lang :: prelude :: account (mut , seeds = [:: \
-                              merkle_tree_program :: program :: MerkleTreeProgram :: id () . \
-                              to_bytes () . as_ref ()] , bump)]"
-        ));
-        assert!(res
-            .contains("pub authority : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"));
-        assert!(res.contains(
-            "pub token_program : :: anchor_lang :: prelude :: Program < 'info , :: anchor_lang :: \
-                              prelude :: Token > ,"
-        ));
-        assert!(
-            res.contains("pub sender : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,")
-        );
-        assert!(res
-            .contains("pub recipient : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"));
-        assert!(res.contains(
-            "pub sender_fee : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"
-        ));
-        assert!(res.contains(
-            "pub recipient_fee : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"
-        ));
-        assert!(res.contains(
-            "pub relayer_recipient : :: anchor_lang :: prelude :: UncheckedAccount < 'info > ,"
-        ));
-        assert!(res.contains(
-            "# [:: anchor_lang :: prelude :: account (mut , seeds = [:: \
-                              merkle_tree_program :: utils :: constants :: TOKEN_AUTHORITY_SEED] , \
-                              bump , seeds :: program = :: merkle_tree_program :: program :: \
-                              MerkleTreeProgram :: id ())]"
-        ));
-        assert!(res.contains(
-            "pub token_authority : :: anchor_lang :: prelude :: AccountInfo < 'info > ,"
-        ));
-        assert!(res.contains(
-            "# [:: anchor_lang :: prelude :: account (mut , seeds = [program_id . \
-                              key () . to_bytes () . as_ref ()] , bump , seeds :: program = :: \
-                              merkle_tree_program :: program :: MerkleTreeProgram :: id ())]"
-        ));
-        assert!(res.contains(
-            "pub registered_verifier_pda : :: anchor_lang :: prelude :: Account < 'info , \
-                              :: merkle_tree_program :: config_accounts :: register_verifier :: \
-                              RegisteredVerifier > ,"
-        ));
+        assert!(res.contains("pub (crate) mod __cpi_client_accounts_light_instruction"));
     }
 }
